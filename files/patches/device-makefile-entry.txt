@@ -2,7 +2,7 @@ define Device/ruijie_rg-ma3063
   $(call Device/FitImageLzma)
   DEVICE_VENDOR := Ruijie
   DEVICE_MODEL := RG-MA3063
-  DEVICE_DTS := qcom/ipq5018-ruijie-rg-ma3063
+  DEVICE_DTS := ipq5018-ruijie-rg-ma3063
   DEVICE_DTS_CONFIG := config@mp03.5-c2
   DEVICE_PACKAGES := \
     ath11k-firmware-ipq5018 \
