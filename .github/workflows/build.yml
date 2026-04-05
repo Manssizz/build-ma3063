@@ -1,0 +1,352 @@
+name: Build OpenWrt — Ruijie RG-MA3063
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build (hapus cache)'
+        required: false
+        default: 'false'
+        type: boolean
+
+# ==============================================================
+# CATATAN TFTP BOOT (untuk test initramfs via U-Boot):
+#
+# U-Boot env default:
+#   ipaddr    = 192.168.10.10   (IP router saat di U-Boot)
+#   serverip  = 192.168.10.19   (IP TFTP server / PC)
+#
+# Interrupt boot saat countdown, lalu:
+#   setenv serverip <IP_PC_KAMU>
+#   tftpboot 0x44000000 openwrt-qualcommax-ipq50xx-ruijie_rg-ma3063-initramfs-uImage.itb
+#   bootm 0x44000000#config@mp03.5-c2
+#
+# Note: U-Boot OEM 32-bit, tapi ATF (TrustZone) handle switch ke arm64.
+# Confirmed dari: strings /dev/mtd11 → "Jumping to AARCH64 kernel via monitor"
+# ==============================================================
+
+env:
+  OPENWRT_BRANCH: openwrt-23.05
+  TARGET: qualcommax
+  SUBTARGET: ipq50xx
+  DEVICE_PROFILE: ruijie_rg-ma3063
+
+jobs:
+  build:
+    name: Build OpenWrt for Ruijie RG-MA3063
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+
+      # ── 1. Checkout repo ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Install dependencies ───────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev \
+            libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget curl libelf-dev quilt u-boot-tools
+
+      # ── 3. Clone OpenWrt 23.05 ───────────────────────────────────────────────
+      - name: Clone OpenWrt source
+        run: |
+          git clone --depth=1 -b ${{ env.OPENWRT_BRANCH }} \
+            https://github.com/openwrt/openwrt.git openwrt
+          echo "Commit: $(cd openwrt && git log --oneline -1)"
+
+      # ── 4. Download QCN6122 firmware dari ath11k-firmware resmi ──────────────
+      #
+      # PENTING — mengapa bukan dari OEM:
+      #   OEM Ruijie pakai kernel 4.4 armv7 (32-bit).
+      #   q6_fw/m3_fw dari OEM bisa mismatch dengan ath11k di kernel 6.1 arm64
+      #   → WiFi 5GHz (QCN6122) tidak akan jalan.
+      #
+      # Yang TETAP dari OEM (board-specific, tidak bisa diganti):
+      #   IPQ5018 board.bin ← bdwlan.b23 (board_id 23, verified dmesg cnss[2])
+      #   QCN6122 board.bin ← bdwlan.b60 (board_id 60, verified dmesg cnss[41])
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Download QCN6122 DSP firmware (ath11k-firmware)
+        run: |
+          git clone --depth=1 https://github.com/kvalo/ath11k-firmware.git
+
+          echo "=== QCN6122 firmware dari ath11k-firmware repo ==="
+          ls -lh ath11k-firmware/QCN6122/hw1.0/ || \
+            (echo "ERROR: QCN6122 firmware tidak ditemukan!" && exit 1)
+
+          # Simpan commit hash untuk audit
+          echo "ath11k-firmware commit: $(cd ath11k-firmware && git log --oneline -1)"
+
+      # ── 5. Copy file device ke OpenWrt tree ──────────────────────────────────
+      - name: Copy custom device files
+        run: |
+          echo "=== Checking required files in repo ==="
+          test -f files/dts/ipq5018-ruijie-rg-ma3063.dts    || (echo "MISSING: DTS" && exit 1)
+          test -f files/firmware/ipq5018/board.bin           || (echo "MISSING: IPQ5018 board.bin (bdwlan.b23)" && exit 1)
+          test -f files/firmware/qcn6122/board.bin           || (echo "MISSING: QCN6122 board.bin (bdwlan.b60)" && exit 1)
+          echo "✅ Semua file OEM tersedia"
+
+          # ── DTS ──────────────────────────────────────────────────────────────
+          cp files/dts/ipq5018-ruijie-rg-ma3063.dts \
+             openwrt/target/linux/qualcommax/files-6.1/arch/arm64/boot/dts/qcom/
+
+          # ── Firmware directories ──────────────────────────────────────────────
+          mkdir -p openwrt/target/linux/qualcommax/ipq50xx/base-files/lib/firmware/ath11k/IPQ5018/hw1.0/
+          mkdir -p openwrt/target/linux/qualcommax/ipq50xx/base-files/lib/firmware/ath11k/QCN6122/hw1.0/
+
+          FW_DIR="openwrt/target/linux/qualcommax/ipq50xx/base-files/lib/firmware/ath11k"
+
+          # ── IPQ5018 BDF (dari OEM) ────────────────────────────────────────────
+          cp files/firmware/ipq5018/board.bin \
+             "$FW_DIR/IPQ5018/hw1.0/board.bin"
+
+          # ── QCN6122 BDF (dari OEM, board-specific) ───────────────────────────
+          cp files/firmware/qcn6122/board.bin \
+             "$FW_DIR/QCN6122/hw1.0/board.bin"
+
+          # ── QCN6122 DSP firmware (dari ath11k-firmware repo) ─────────────────
+          cp ath11k-firmware/QCN6122/hw1.0/q6_fw.mdt "$FW_DIR/QCN6122/hw1.0/"
+          cp ath11k-firmware/QCN6122/hw1.0/m3_fw.mdt "$FW_DIR/QCN6122/hw1.0/"
+          find ath11k-firmware/QCN6122/hw1.0/ -name "q6_fw.b*" \
+            -exec cp {} "$FW_DIR/QCN6122/hw1.0/" \;
+          find ath11k-firmware/QCN6122/hw1.0/ -name "m3_fw.b*" \
+            -exec cp {} "$FW_DIR/QCN6122/hw1.0/" \;
+
+          echo "=== Final firmware layout ==="
+          find "$FW_DIR" -type f | sort
+
+      # ── 6. Apply patches ke OpenWrt tree ─────────────────────────────────────
+      - name: Apply device patches
+        run: |
+          cd openwrt
+
+          # ── Patch 1: DTS Makefile ─────────────────────────────────────────────
+          DTS_MK="target/linux/qualcommax/files-6.1/arch/arm64/boot/dts/qcom/Makefile"
+          if ! grep -q "ipq5018-ruijie-rg-ma3063" "$DTS_MK"; then
+            sed -i '/ipq5018-linksys-mx2000/a dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb' "$DTS_MK"
+            echo "✅ DTS Makefile patched"
+          else
+            echo "⏭ DTS Makefile skip (sudah ada)"
+          fi
+
+          # ── Patch 2: Device definition ────────────────────────────────────────
+          DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
+          if ! grep -q "ruijie_rg-ma3063" "$DEVICE_MK"; then
+            cat >> "$DEVICE_MK" << 'EOF'
+
+define Device/ruijie_rg-ma3063
+  $(call Device/FitImageLzma)
+  DEVICE_VENDOR := Ruijie
+  DEVICE_MODEL := RG-MA3063
+  DEVICE_DTS := qcom/ipq5018-ruijie-rg-ma3063
+  DEVICE_DTS_CONFIG := config@mp03.5-c2
+  DEVICE_PACKAGES := \
+    ath11k-firmware-ipq5018 \
+    kmod-ath11k-ahb \
+    kmod-ath11k-pci
+  SOC := ipq5018
+endef
+TARGET_DEVICES += ruijie_rg-ma3063
+EOF
+            echo "✅ Device Makefile patched"
+          else
+            echo "⏭ Device Makefile skip (sudah ada)"
+          fi
+
+          # ── Patch 3: Network board config ────────────────────────────────────
+          # eth0 = WAN → dp1 (IPQ5018 internal GE PHY)
+          # eth1-3 = LAN → dp2-4 (QCA8337 port 1-3)
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          if ! grep -q "ruijie,rg-ma3063" "$BOARD_NET"; then
+            sed -i '/^esac/i\\t\truijie,rg-ma3063)\n\t\t\tucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"\n\t\t\t;;' "$BOARD_NET"
+            echo "✅ Network board config patched"
+          else
+            echo "⏭ Network board config skip (sudah ada)"
+          fi
+
+      # ── 7. Update & install feeds ─────────────────────────────────────────────
+      - name: Update feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # ── 8. Cache toolchain ────────────────────────────────────────────────────
+      - name: Cache toolchain
+        if: inputs.clean_build != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/staging_dir/toolchain-*
+            openwrt/staging_dir/host
+            openwrt/build_dir/host
+            openwrt/build_dir/hostpkg
+          key: toolchain-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('openwrt/include/version.mk') }}
+          restore-keys: |
+            toolchain-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
+
+      # ── 9. Generate .config ───────────────────────────────────────────────────
+      - name: Generate build config
+        run: |
+          cd openwrt
+
+          cat > .config << 'EOF'
+          # Target — arm64, qualcommax/ipq50xx
+          # Note: U-Boot OEM 32-bit tapi ATF handle switch ke arm64 ✅
+          CONFIG_TARGET_qualcommax=y
+          CONFIG_TARGET_qualcommax_ipq50xx=y
+          CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_ruijie_rg-ma3063=y
+
+          # WiFi — ath11k
+          CONFIG_PACKAGE_kmod-ath11k=y
+          CONFIG_PACKAGE_kmod-ath11k-ahb=y
+          CONFIG_PACKAGE_kmod-ath11k-pci=y
+          CONFIG_PACKAGE_ath11k-firmware-ipq5018=y
+
+          # Wireless tools
+          CONFIG_PACKAGE_hostapd=y
+          CONFIG_PACKAGE_hostapd-utils=y
+          CONFIG_PACKAGE_iwinfo=y
+          CONFIG_PACKAGE_iw=y
+          CONFIG_PACKAGE_wireless-tools=y
+
+          # LuCI — Web UI
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-mod-admin-full=y
+          CONFIG_PACKAGE_luci-mod-network=y
+          CONFIG_PACKAGE_luci-mod-status=y
+          CONFIG_PACKAGE_luci-mod-system=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_luci-app-opkg=y
+          CONFIG_PACKAGE_luci-app-wireless=y
+          CONFIG_PACKAGE_luci-theme-bootstrap=y
+
+          # Basic networking
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_kmod-nft-offload=y
+          CONFIG_PACKAGE_dnsmasq=y
+          CONFIG_PACKAGE_odhcp6c=y
+          CONFIG_PACKAGE_odhcpd-ipv6only=y
+          CONFIG_PACKAGE_ppp=y
+          CONFIG_PACKAGE_ppp-mod-pppoe=y
+
+          # System utilities
+          CONFIG_PACKAGE_bash=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_wget-ssl=y
+          CONFIG_PACKAGE_htop=y
+          CONFIG_PACKAGE_nano=y
+
+          # SSH
+          CONFIG_PACKAGE_openssh-sftp-server=y
+
+          # NAND / UBI
+          CONFIG_PACKAGE_kmod-mtd-rw=y
+          CONFIG_PACKAGE_uboot-envtools=y
+          CONFIG_PACKAGE_mtd=y
+
+          # Image format
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+          CONFIG_TARGET_ROOTFS_INITRAMFS=y
+          CONFIG_TARGET_INITRAMFS_COMPRESSION_LZMA=y
+          EOF
+
+          make defconfig
+
+      # ── 10. Build toolchain ───────────────────────────────────────────────────
+      - name: Build toolchain
+        run: |
+          cd openwrt
+          make toolchain/install -j$(nproc) V=s 2>&1 | tail -5
+
+      # ── 11. Build image ───────────────────────────────────────────────────────
+      - name: Build firmware image
+        run: |
+          cd openwrt
+          make -j$(nproc) V=s 2>&1 | tee /tmp/build.log | \
+            grep -E "make\[1\]|ERROR:|error:|WARNING:|Built target|ruijie" || true
+
+      # ── 12. Verify FIT image config selector ──────────────────────────────────
+      #
+      # config@mp03.5-c2 adalah nilai dari referensi MX2000/MX5500.
+      # Kalau tidak ada di FIT image, bootm di U-Boot akan error.
+      # Step ini cek dan tampilkan config yang tersedia.
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Verify FIT image config selector
+        run: |
+          BINDIR="openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
+          ITB=$(find "$BINDIR" -name "*ruijie*initramfs*.itb" 2>/dev/null | head -1)
+
+          if [ -z "$ITB" ]; then
+            echo "⚠️  initramfs .itb tidak ditemukan, skip verifikasi"
+            exit 0
+          fi
+
+          echo "=== FIT image: $ITB ==="
+          echo "=== Konfigurasi yang tersedia ==="
+          dumpimage -l "$ITB" | grep -A2 "config@"
+
+          if dumpimage -l "$ITB" | grep -q "config@mp03.5-c2"; then
+            echo ""
+            echo "✅ config@mp03.5-c2 ADA — bootm command sudah benar:"
+            echo "   bootm 0x44000000#config@mp03.5-c2"
+          else
+            echo ""
+            echo "⚠️  config@mp03.5-c2 TIDAK ADA di FIT image!"
+            echo "   Lihat daftar config di atas, update DEVICE_DTS_CONFIG di Makefile"
+            echo "   dan update bootm command di U-Boot saat TFTP test."
+          fi
+
+      # ── 13. Collect artifacts ─────────────────────────────────────────────────
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          BINDIR="openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
+
+          # Initramfs — test TFTP dulu, TIDAK menulis ke NAND
+          find "$BINDIR" -name "*ruijie*initramfs*" -exec cp {} artifacts/ \;
+
+          # Sysupgrade — flash permanen setelah test initramfs OK
+          find "$BINDIR" -name "*ruijie*sysupgrade*" -exec cp {} artifacts/ \;
+
+          # Config & manifest
+          cp openwrt/.config artifacts/dotconfig
+          find "$BINDIR" -name "*.manifest" -exec cp {} artifacts/ \;
+          find "$BINDIR" -name "sha256sums"  -exec cp {} artifacts/ \;
+
+          # Catat versi firmware ath11k yang dipakai
+          {
+            echo "=== ath11k-firmware (QCN6122 DSP) ==="
+            cd ath11k-firmware && git log --oneline -3
+            echo ""
+            echo "=== Files ==="
+            ls -lh QCN6122/hw1.0/
+          } > artifacts/ath11k_fw_info.txt
+
+          echo "=== Artifacts ==="
+          ls -lh artifacts/
+
+      # ── 14. Upload artifacts ──────────────────────────────────────────────────
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-ruijie-rg-ma3063-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 14
+
+      # ── 15. Upload build log jika gagal ──────────────────────────────────────
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: /tmp/build.log
+          retention-days: 7
