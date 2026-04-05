@@ -135,6 +135,20 @@ jobs:
           echo "=== Final firmware layout ==="
           find openwrt/${{ env.FW_DIR }} -type f | sort
 
+
+      - name: Debug — dump reference DTS and check our DTS syntax
+        run: |
+          echo "=== Referensi DTS device lain (ipq5018-linksys-mx2000.dts) ==="
+          cat openwrt/${{ env.DTS_DIR }}/ipq5018-linksys-mx2000.dts || echo "(tidak ada)"
+
+          echo ""
+          echo "=== ipq5018.dtsi node names (grep label) ==="
+          grep -E "^[a-z].*: [a-z].*@"             openwrt/build_dir/target-*/linux-qualcommax_ipq50xx/linux-*/arch/arm64/boot/dts/qcom/ipq5018.dtsi             2>/dev/null | head -40 ||           find openwrt -name "ipq5018.dtsi" 2>/dev/null | head -3
+
+          echo ""
+          echo "=== DTS kita (ipq5018-ruijie-rg-ma3063.dts) ==="
+          cat openwrt/${{ env.DTS_DIR }}/ipq5018-ruijie-rg-ma3063.dts
+
       - name: Apply patches to OpenWrt tree
         run: |
           cd openwrt
