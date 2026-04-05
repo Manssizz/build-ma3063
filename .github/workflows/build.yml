@@ -12,7 +12,7 @@ name: Build OpenWrt — Ruijie RG-MA3063
 #   tftpboot 0x44000000 openwrt-qualcommax-ipq50xx-ruijie_rg-ma3063-initramfs-uImage.itb
 #   bootm 0x44000000#config@mp03.5-c2
 #
-# U-Boot OEM 32-bit, ATF (TrustZone) handle switch ke arm64.
+# U-Boot OEM 32-bit, ATF handle switch ke arm64.
 # Confirmed: strings /dev/mtd11 -> "Jumping to AARCH64 kernel via monitor"
 #
 # ==============================================================
@@ -20,14 +20,13 @@ name: Build OpenWrt — Ruijie RG-MA3063
 #
 # files/firmware/
 # ├── ipq5018/
-# │   ├── bdwlan.bin / bdwlan.b10 / b20 / b21 / b22 / b23(*) / b24
+# │   ├── bdwlan.bin / bdwlan.b10/b20/b21/b22/b23(*)/b24
 # └── qcn6122/
-#     ├── bdwlan.bin / bdwlan.b50 / b60(*) / b90 / bb0
-#     ├── m3_fw.mdt / m3_fw.b00 / b01 / b02
+#     ├── bdwlan.bin / bdwlan.b50/b60(*)/b90/bb0
+#     ├── m3_fw.mdt / m3_fw.b00/b01/b02
 #     └── q6_fw.mdt / q6_fw.b00~b21 (skip b06/b12)
 #
 # (*) = variant aktif: IPQ5018 board_id=23, QCN6122 board_id=60
-#       verified dari dmesg cnss[2] dan cnss[41]
 # ==============================================================
 
 on:
@@ -40,7 +39,7 @@ on:
         type: boolean
 
 env:
-  OPENWRT_BRANCH: openwrt-23.05
+  OPENWRT_BRANCH: openwrt-24.10
   TARGET: qualcommax
   SUBTARGET: ipq50xx
   DEVICE_PROFILE: ruijie_rg-ma3063
@@ -70,29 +69,59 @@ jobs:
         run: |
           git clone --depth=1 -b ${{ env.OPENWRT_BRANCH }} \
             https://github.com/openwrt/openwrt.git openwrt
-          echo "Commit: $(cd openwrt && git log --oneline -1)"
+          echo "=== OpenWrt commit ==="
+          cd openwrt && git log --oneline -1
 
-      - name: Validate required files
+      # ── Detect path penting di OpenWrt tree ──────────────────────────────────
+      # Kernel version bisa berubah antar branch (5.15 / 6.1 / dll).
+      # Detect otomatis supaya tidak hardcode.
+      - name: Detect OpenWrt tree paths
+        run: |
+          echo "=== Struktur target/linux/qualcommax/ ==="
+          ls openwrt/target/linux/qualcommax/
+
+          echo ""
+          echo "=== Mencari direktori DTS qcom ==="
+          DTS_DIR=$(find openwrt/target/linux/qualcommax -type d -name "qcom" \
+            -path "*/boot/dts/qcom" | head -1)
+
+          if [ -z "$DTS_DIR" ]; then
+            echo "ERROR: direktori DTS qcom tidak ditemukan!"
+            echo "Isi files-* yang ada:"
+            find openwrt/target/linux/qualcommax -maxdepth 2 -type d | sort
+            exit 1
+          fi
+
+          echo "✅ DTS dir: $DTS_DIR"
+          echo "DTS_DIR=$DTS_DIR" >> $GITHUB_ENV
+
+          echo ""
+          echo "=== Mencari Makefile DTS ==="
+          ls "$DTS_DIR/" | head -20
+
+          echo ""
+          echo "=== ipq50xx Makefile (cuplikan device definitions) ==="
+          grep -n "define Device\|TARGET_DEVICES" \
+            openwrt/target/linux/qualcommax/ipq50xx/Makefile | head -20
+
+          echo ""
+          echo "=== 02_network board config (cuplikan) ==="
+          cat openwrt/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+
+      - name: Validate required files in repo
         run: |
           echo "=== Checking required files ==="
 
-          # DTS
           test -f files/dts/ipq5018-ruijie-rg-ma3063.dts \
             || (echo "MISSING: files/dts/ipq5018-ruijie-rg-ma3063.dts" && exit 1)
-
-          # Config & patches
           test -f files/config/ma3063.config \
             || (echo "MISSING: files/config/ma3063.config" && exit 1)
           test -f files/patches/device-makefile-entry.txt \
             || (echo "MISSING: files/patches/device-makefile-entry.txt" && exit 1)
-
-          # IPQ5018 firmware — minimal bdwlan.b23 (aktif board_id=23)
           test -f files/firmware/ipq5018/bdwlan.b23 \
-            || (echo "MISSING: files/firmware/ipq5018/bdwlan.b23 (aktif, board_id 23)" && exit 1)
-
-          # QCN6122 firmware — minimal bdwlan.b60 + DSP firmware
+            || (echo "MISSING: files/firmware/ipq5018/bdwlan.b23 (board_id 23)" && exit 1)
           test -f files/firmware/qcn6122/bdwlan.b60 \
-            || (echo "MISSING: files/firmware/qcn6122/bdwlan.b60 (aktif, board_id 60)" && exit 1)
+            || (echo "MISSING: files/firmware/qcn6122/bdwlan.b60 (board_id 60)" && exit 1)
           test -f files/firmware/qcn6122/m3_fw.mdt \
             || (echo "MISSING: files/firmware/qcn6122/m3_fw.mdt" && exit 1)
           test -f files/firmware/qcn6122/q6_fw.mdt \
@@ -100,39 +129,44 @@ jobs:
 
           echo "✅ Semua file tersedia"
           echo ""
-          echo "=== IPQ5018 firmware files ==="
+          echo "=== files/firmware/ipq5018/ ==="
           ls -lh files/firmware/ipq5018/
           echo ""
-          echo "=== QCN6122 firmware files ==="
+          echo "=== files/firmware/qcn6122/ ==="
           ls -lh files/firmware/qcn6122/
 
       - name: Copy DTS and firmware to OpenWrt tree
         run: |
           FW_DIR="openwrt/target/linux/qualcommax/ipq50xx/base-files/lib/firmware/ath11k"
-          DTS_DIR="openwrt/target/linux/qualcommax/files-6.1/arch/arm64/boot/dts/qcom"
 
           mkdir -p "$FW_DIR/IPQ5018/hw1.0"
           mkdir -p "$FW_DIR/QCN6122/hw1.0"
 
-          # ── DTS ──────────────────────────────────────────────────────────────
-          cp files/dts/ipq5018-ruijie-rg-ma3063.dts "$DTS_DIR/"
+          # ── DTS — pakai path yang sudah di-detect ─────────────────────────────
+          echo "=== Copy DTS ke $DTS_DIR ==="
+          cp -v files/dts/ipq5018-ruijie-rg-ma3063.dts "$DTS_DIR/"
 
           # ── IPQ5018 — semua bdwlan dari OEM ──────────────────────────────────
-          cp files/firmware/ipq5018/bdwlan.* "$FW_DIR/IPQ5018/hw1.0/"
-          # board.bin = copy dari variant aktif (board_id 23)
-          # ath11k lookup: bdwlan.b23 → board_id match → load
-          # board.bin sebagai fallback kalau lookup gagal
-          cp files/firmware/ipq5018/bdwlan.b23 "$FW_DIR/IPQ5018/hw1.0/board.bin"
+          echo ""
+          echo "=== Copy IPQ5018 firmware ==="
+          cp -v files/firmware/ipq5018/bdwlan.* "$FW_DIR/IPQ5018/hw1.0/"
+          # board.bin = variant aktif (board_id 23) sebagai fallback
+          cp -v files/firmware/ipq5018/bdwlan.b23 "$FW_DIR/IPQ5018/hw1.0/board.bin"
 
           # ── QCN6122 — semua bdwlan dari OEM ──────────────────────────────────
-          cp files/firmware/qcn6122/bdwlan.* "$FW_DIR/QCN6122/hw1.0/"
-          # board.bin = copy dari variant aktif (board_id 60)
-          cp files/firmware/qcn6122/bdwlan.b60 "$FW_DIR/QCN6122/hw1.0/board.bin"
+          echo ""
+          echo "=== Copy QCN6122 BDF firmware ==="
+          cp -v files/firmware/qcn6122/bdwlan.* "$FW_DIR/QCN6122/hw1.0/"
+          # board.bin = variant aktif (board_id 60) sebagai fallback
+          cp -v files/firmware/qcn6122/bdwlan.b60 "$FW_DIR/QCN6122/hw1.0/board.bin"
 
-          # ── QCN6122 DSP firmware dari OEM ────────────────────────────────────
-          cp files/firmware/qcn6122/m3_fw.* "$FW_DIR/QCN6122/hw1.0/"
-          cp files/firmware/qcn6122/q6_fw.* "$FW_DIR/QCN6122/hw1.0/"
+          # ── QCN6122 — DSP firmware dari OEM ──────────────────────────────────
+          echo ""
+          echo "=== Copy QCN6122 DSP firmware ==="
+          cp -v files/firmware/qcn6122/m3_fw.* "$FW_DIR/QCN6122/hw1.0/"
+          cp -v files/firmware/qcn6122/q6_fw.* "$FW_DIR/QCN6122/hw1.0/"
 
+          echo ""
           echo "=== Final firmware layout ==="
           find "$FW_DIR" -type f | sort
 
@@ -141,26 +175,44 @@ jobs:
           cd openwrt
 
           # ── Patch 1: Tambah DTB ke DTS Makefile ──────────────────────────────
-          DTS_MK="target/linux/qualcommax/files-6.1/arch/arm64/boot/dts/qcom/Makefile"
+          DTS_MK="$DTS_DIR/Makefile"
+          echo "=== DTS Makefile: $DTS_MK ==="
+          echo "--- IPQ5018 entries sebelum patch ---"
+          grep "ipq5018" "$DTS_MK" || echo "(belum ada)"
+
           if ! grep -q "ipq5018-ruijie-rg-ma3063" "$DTS_MK"; then
-            sed -i '/ipq5018-linksys-mx2000/a dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb' "$DTS_MK"
+            # Cari anchor — entry ipq5018 lain sebagai titik sisip
+            ANCHOR=$(grep "ipq5018-linksys-mx2000\|ipq5018-" "$DTS_MK" | head -1 | \
+              sed 's/^[[:space:]]*//' | cut -d' ' -f1)
+            if [ -n "$ANCHOR" ]; then
+              sed -i "/$ANCHOR/a dtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb" "$DTS_MK"
+            else
+              echo "dtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb" >> "$DTS_MK"
+            fi
+            echo "--- Setelah patch ---"
+            grep "ipq5018" "$DTS_MK"
             echo "✅ DTS Makefile patched"
           else
             echo "⏭ DTS Makefile sudah ada, skip"
           fi
 
-          # ── Patch 2: Tambah device entry ke ipq50xx Makefile ─────────────────
+          # ── Patch 2: Device entry ke ipq50xx Makefile ─────────────────────────
           DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
+          echo ""
+          echo "=== Device Makefile patch ==="
           if ! grep -q "ruijie_rg-ma3063" "$DEVICE_MK"; then
             cat "../files/patches/device-makefile-entry.txt" >> "$DEVICE_MK"
             echo "✅ Device Makefile patched"
+            echo "--- Verifikasi ---"
+            grep -A5 "ruijie_rg-ma3063" "$DEVICE_MK" | head -10
           else
             echo "⏭ Device Makefile sudah ada, skip"
           fi
 
-          # ── Patch 3: Tambah network board config ─────────────────────────────
-          # eth0=WAN (dp1, IPQ5018 GE PHY), eth1-3=LAN (dp2-4, QCA8337)
+          # ── Patch 3: Network board config ─────────────────────────────────────
           BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          echo ""
+          echo "=== Network board config patch ==="
           if ! grep -q "ruijie,rg-ma3063" "$BOARD_NET"; then
             python3 -c "
           import re
@@ -170,6 +222,8 @@ jobs:
           open('$BOARD_NET', 'w').write(content)
           "
             echo "✅ Network board config patched"
+            echo "--- Verifikasi ---"
+            grep -A3 "ruijie,rg-ma3063" "$BOARD_NET"
           else
             echo "⏭ Network board config sudah ada, skip"
           fi
@@ -177,8 +231,10 @@ jobs:
       - name: Update feeds
         run: |
           cd openwrt
+          echo "=== Updating feeds ==="
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          echo "✅ Feeds updated"
 
       - name: Cache toolchain
         if: inputs.clean_build != 'true'
@@ -189,54 +245,64 @@ jobs:
             openwrt/staging_dir/host
             openwrt/build_dir/host
             openwrt/build_dir/hostpkg
-          key: toolchain-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('openwrt/include/version.mk') }}
+          # main = rolling/snapshot, key pakai hash version.mk + toolchain Makefile
+          key: toolchain-24.10-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('openwrt/include/version.mk', 'openwrt/toolchain/Makefile') }}
           restore-keys: |
-            toolchain-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
+            toolchain-24.10-${{ env.TARGET }}-${{ env.SUBTARGET }}-
 
       - name: Generate build config
         run: |
-          cp files/config/ma3063.config openwrt/.config
-          cd openwrt && make defconfig
-          echo "=== Active device config ==="
+          echo "=== Copy .config ==="
+          cp -v files/config/ma3063.config openwrt/.config
+
+          cd openwrt
+          make defconfig 2>&1 | tail -5
+
+          echo ""
+          echo "=== Active config (target + packages) ==="
           grep -E "^CONFIG_TARGET|DEVICE_ruijie|PACKAGE_luci|PACKAGE_ath11k|PACKAGE_kmod-ath11k" .config
 
       - name: Build toolchain
         run: |
           cd openwrt
-          make toolchain/install -j$(nproc) V=s 2>&1 | tail -5
+          echo "=== Building toolchain ==="
+          make toolchain/install -j$(nproc) V=s 2>&1 | tail -10
+          echo "✅ Toolchain done"
 
       - name: Build firmware image
         run: |
           cd openwrt
+          echo "=== Building firmware ==="
           make -j$(nproc) V=s 2>&1 | tee /tmp/build.log | \
-            grep -E "make\[1\]|ERROR:|error:|WARNING:|Built target|ruijie" || true
+            grep -E "make\[1\]|ERROR:|error:|WARNING:|Built target|ruijie|ath11k" || true
 
-      # ── Verifikasi config selector FIT image ──────────────────────────────────
-      # config@mp03.5-c2 = asumsi dari referensi MX2000/MX5500.
-      # Kalau tidak ada → update DEVICE_DTS_CONFIG di device-makefile-entry.txt
-      # dan update bootm command saat TFTP test.
+          echo ""
+          echo "=== Build output files ==="
+          find bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/ \
+            -maxdepth 1 -type f | sort
+
       - name: Verify FIT image config selector
         run: |
           BINDIR="openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
           ITB=$(find "$BINDIR" -name "*ruijie*initramfs*.itb" 2>/dev/null | head -1)
 
           if [ -z "$ITB" ]; then
-            echo "⚠️  initramfs .itb tidak ditemukan, skip"
+            echo "⚠️  initramfs .itb tidak ditemukan, skip verifikasi"
             exit 0
           fi
 
-          echo "=== FIT image configs tersedia ==="
-          dumpimage -l "$ITB" | grep "config@"
+          echo "=== FIT image: $(basename $ITB) ==="
+          echo "=== Semua konfigurasi tersedia ==="
+          dumpimage -l "$ITB" | grep -E "config@|Configuration"
 
+          echo ""
           if dumpimage -l "$ITB" | grep -q "config@mp03.5-c2"; then
-            echo ""
-            echo "✅ config@mp03.5-c2 ADA — U-Boot bootm command sudah benar:"
+            echo "✅ config@mp03.5-c2 ADA — U-Boot command:"
             echo "   bootm 0x44000000#config@mp03.5-c2"
           else
-            echo ""
-            echo "⚠️  config@mp03.5-c2 TIDAK ADA di FIT image!"
+            echo "⚠️  config@mp03.5-c2 TIDAK ADA!"
+            echo "   Gunakan salah satu config di atas."
             echo "   Update DEVICE_DTS_CONFIG di files/patches/device-makefile-entry.txt"
-            echo "   sesuai config yang tersedia di atas, lalu rebuild."
           fi
 
       - name: Collect artifacts
@@ -244,17 +310,20 @@ jobs:
           mkdir -p artifacts
           BINDIR="openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
 
-          # Initramfs — test via TFTP, TIDAK menulis ke NAND
-          find "$BINDIR" -name "*ruijie*initramfs*" -exec cp {} artifacts/ \;
+          echo "=== Collecting artifacts ==="
+
+          # Initramfs — test via TFTP, tidak menulis ke NAND
+          find "$BINDIR" -name "*ruijie*initramfs*" -exec cp -v {} artifacts/ \;
 
           # Sysupgrade — flash permanen setelah test initramfs OK
-          find "$BINDIR" -name "*ruijie*sysupgrade*" -exec cp {} artifacts/ \;
+          find "$BINDIR" -name "*ruijie*sysupgrade*" -exec cp -v {} artifacts/ \;
 
           cp openwrt/.config artifacts/dotconfig
-          find "$BINDIR" -name "*.manifest" -exec cp {} artifacts/ \;
-          find "$BINDIR" -name "sha256sums"  -exec cp {} artifacts/ \;
+          find "$BINDIR" -name "*.manifest" -exec cp -v {} artifacts/ \;
+          find "$BINDIR" -name "sha256sums"  -exec cp -v {} artifacts/ \;
 
-          echo "=== Artifacts ==="
+          echo ""
+          echo "=== Final artifacts ==="
           ls -lh artifacts/
 
       - name: Upload firmware artifacts
