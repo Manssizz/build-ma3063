@@ -181,8 +181,11 @@ jobs:
           import re
           f = '$BOARD_NET'
           c = open(f).read()
-          e = '\truijie,rg-ma3063)\n\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t;;\n'
-          c = re.sub(r'^esac', e + 'esac', c, flags=re.MULTILINE)
+          # 25.12 pakai fungsi ipq50xx_setup_interfaces() dengan case di dalamnya
+          # Sisipkan entry sebelum esac terakhir di dalam fungsi
+          entry = '\truijie,rg-ma3063)\n\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t;;\n\t'
+          # match baris 'esac' yang diawali whitespace (di dalam fungsi)
+          c = re.sub(r'(\tesac)', entry + r'\1', c, count=1)
           open(f, 'w').write(c)
           "
             echo "✅ Patched"
