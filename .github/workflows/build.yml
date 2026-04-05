@@ -79,24 +79,47 @@ jobs:
           ls "$DTS_DIR/" | grep -i "ipq5018\|ipq50" | head -20 || ls "$DTS_DIR/" | head -20
 
           echo ""
-          echo "=== ipq50xx/Makefile (device definitions) ==="
+          echo "=== Detect DEVICE_MK (device definitions Makefile) ==="
+          # Di 25.12, device definitions bisa di root qualcommax/Makefile
+          # atau di ipq50xx/Makefile — detect otomatis
           if [ -f "openwrt/target/linux/qualcommax/ipq50xx/Makefile" ]; then
-            grep -n "define Device\|TARGET_DEVICES" \
-              openwrt/target/linux/qualcommax/ipq50xx/Makefile | head -20
+            DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
+            echo "✅ Device MK: ipq50xx/Makefile (struktur lama)"
+          elif grep -q "define Device" "openwrt/target/linux/qualcommax/Makefile" 2>/dev/null; then
+            DEVICE_MK="target/linux/qualcommax/Makefile"
+            echo "✅ Device MK: qualcommax/Makefile (struktur 25.12)"
           else
-            echo "ERROR: ipq50xx/Makefile tidak ada!"
-            ls openwrt/target/linux/qualcommax/
-            exit 1
+            # Cari di semua Makefile di bawah qualcommax
+            FOUND=$(grep -rl "define Device" openwrt/target/linux/qualcommax/               --include="Makefile" 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              DEVICE_MK="${FOUND#openwrt/}"
+              echo "✅ Device MK: $DEVICE_MK (ditemukan via grep)"
+            else
+              echo "⚠️  Device Makefile tidak ditemukan — akan append ke ipq50xx/Makefile"
+              DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
+            fi
           fi
+          echo "DEVICE_MK=$DEVICE_MK" >> $GITHUB_ENV
+          echo ""
+          echo "=== Cuplikan device definitions yang ada ==="
+          grep -n "define Device\|TARGET_DEVICES" "openwrt/$DEVICE_MK" 2>/dev/null | head -20             || echo "(kosong)"
 
           echo ""
-          echo "=== 02_network (jika ada) ==="
-          BOARD_NET="openwrt/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
-          if [ -f "$BOARD_NET" ]; then
-            cat "$BOARD_NET"
+          echo "=== Detect 02_network path ==="
+          BOARD_NET=$(find openwrt/target/linux/qualcommax -name "02_network"             -path "*/board.d/02_network" 2>/dev/null | head -1)
+          if [ -n "$BOARD_NET" ]; then
+            BOARD_NET="${BOARD_NET#openwrt/}"
+            echo "✅ board.d/02_network: $BOARD_NET"
+            cat "openwrt/$BOARD_NET"
           else
-            echo "(belum ada, akan dibuat)"
+            BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+            echo "⚠️  02_network tidak ditemukan, default: $BOARD_NET"
           fi
+          echo "BOARD_NET=$BOARD_NET" >> $GITHUB_ENV
+
+          echo ""
+          echo "=== Isi ipq50xx/ ==="
+          find openwrt/target/linux/qualcommax/ipq50xx -maxdepth 3 | sort
 
       - name: Validate required files in repo
         run: |
@@ -160,87 +183,63 @@ jobs:
           DTS_MK="$DTS_DIR/Makefile"
           echo "=== Patch 1: DTS Makefile ($DTS_MK) ==="
           if [ ! -f "$DTS_MK" ]; then
-            echo "Makefile belum ada, buat baru"
-            printf '%s\n' \
-              '# SPDX-License-Identifier: GPL-2.0' \
-              'dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb' \
-              > "$DTS_MK"
-            echo "Dibuat baru"
+            echo "⚠️  Makefile belum ada, buat baru"
+            echo 'dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb' > "$DTS_MK"
+            echo "✅ Dibuat baru"
           elif ! grep -q "ipq5018-ruijie-rg-ma3063" "$DTS_MK"; then
             echo "before:" && grep "ipq5018" "$DTS_MK" || echo "(kosong)"
             if grep -q "ipq5018-" "$DTS_MK"; then
-              LAST=$(grep "ipq5018-" "$DTS_MK" | tail -1)
-              python3 -c "
-          import re, sys
-          content = open('$DTS_MK').read()
-          last = $(python3 -c "import subprocess; r=subprocess.run(['grep','ipq5018-','$DTS_MK'],capture_output=True,text=True); lines=r.stdout.strip().split('\n'); print(repr(lines[-1]) if lines else \"''\")")
-          entry = 'dtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb\n'
-          content = content.replace(last + '\n', last + '\n' + entry, 1)
-          open('$DTS_MK', 'w').write(content)
-          "
+              sed -i "/ipq5018-.*\.dtb/a dtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb" "$DTS_MK"
             else
-              printf 'dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb\n' >> "$DTS_MK"
+              echo 'dtb-$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb' >> "$DTS_MK"
             fi
             echo "after:" && grep "ipq5018" "$DTS_MK"
-            echo "OK"
+            echo "✅ Patched"
           else
-            echo "Sudah ada, skip"
+            echo "⏭ Sudah ada, skip"
           fi
 
-          # ── Patch 2: Device entry di ipq50xx/Makefile ─────────────────────────
-          DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
+          # ── Patch 2: Device entry ──────────────────────────────────────────────
+          # $DEVICE_MK di-detect di step sebelumnya, di-pass via GITHUB_ENV
           echo ""
-          echo "=== Patch 2: Device Makefile ==="
+          echo "=== Patch 2: Device entry ($DEVICE_MK) ==="
+          if [ ! -f "$DEVICE_MK" ]; then
+            echo "⚠️  File tidak ada, buat baru"
+            mkdir -p "$(dirname $DEVICE_MK)"
+            touch "$DEVICE_MK"
+          fi
           if ! grep -q "ruijie_rg-ma3063" "$DEVICE_MK"; then
             cat "../files/patches/device-makefile-entry.txt" >> "$DEVICE_MK"
-            echo "Patched"
-            grep -A3 "ruijie_rg-ma3063" "$DEVICE_MK" | head -5
+            echo "✅ Patched"
+            grep -A5 "ruijie_rg-ma3063" "$DEVICE_MK" | head -8
           else
-            echo "Sudah ada, skip"
+            echo "⏭ Sudah ada, skip"
           fi
 
-          # ── Patch 3: Network board config ─────────────────────────────────────
-          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          # ── Patch 3: 02_network ────────────────────────────────────────────────
+          # $BOARD_NET di-detect di step sebelumnya, di-pass via GITHUB_ENV
           echo ""
-          echo "=== Patch 3: 02_network ==="
+          echo "=== Patch 3: 02_network ($BOARD_NET) ==="
+          mkdir -p "$(dirname $BOARD_NET)"
           if [ ! -f "$BOARD_NET" ]; then
-            echo "File tidak ada, buat baru"
-            mkdir -p "$(dirname $BOARD_NET)"
+            echo "⚠️  File tidak ada, buat dari scratch"
             python3 -c "
-          content = [
-            '#!/bin/sh',
-            '. /lib/functions/uci-defaults.sh',
-            '',
-            'board_config_update',
-            '',
-            'board=\$(board_name)',
-            'case \"\$board\" in',
-            '\truijie,rg-ma3063)',
-            '\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"',
-            '\t\t;;',
-            'esac',
-            '',
-            'board_config_flush',
-            'exit 0',
-          ]
-          open('$BOARD_NET', 'w').write('\n'.join(content) + '\n')
+          import os
+          content = '#!/bin/sh\n. /lib/functions/uci-defaults.sh\n\nboard_config_update\n\nboard=$(board_name)\ncase \"$board\" in\n\truijie,rg-ma3063)\n\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t;;\nesac\n\nboard_config_flush\nexit 0\n'
+          open(os.environ['BOARD_NET'], 'w').write(content)
+          os.chmod(os.environ['BOARD_NET'], 0o755)
           "
-            chmod +x "$BOARD_NET"
-            echo "Dibuat baru"
+            echo "✅ Dibuat baru"
+            echo "✅ Dibuat baru"
           elif ! grep -q "ruijie,rg-ma3063" "$BOARD_NET"; then
-            python3 -c "
-          import re
-          content = open('$BOARD_NET').read()
-          entry = '\truijie,rg-ma3063)\n\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t;;\n'
-          content = re.sub(r'(^esac)', entry + r'\1', content, flags=re.MULTILINE)
-          open('$BOARD_NET', 'w').write(content)
-          "
-            echo "Patched"
+            sed -i "/^esac/i\\\truijie,rg-ma3063)\n\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t;;" "$BOARD_NET"
+            echo "✅ Patched"
           else
-            echo "Sudah ada, skip"
+            echo "⏭ Sudah ada, skip"
           fi
-          echo "--- 02_network ---"
+          echo "--- 02_network final ---"
           cat "$BOARD_NET"
+
 
       - name: Update feeds
         run: |
