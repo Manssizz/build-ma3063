@@ -14,6 +14,20 @@ name: Build OpenWrt — Ruijie RG-MA3063
 #
 # U-Boot OEM 32-bit, ATF (TrustZone) handle switch ke arm64.
 # Confirmed: strings /dev/mtd11 -> "Jumping to AARCH64 kernel via monitor"
+#
+# ==============================================================
+# STRUKTUR files/firmware/ YANG DIBUTUHKAN:
+#
+# files/firmware/
+# ├── ipq5018/
+# │   ├── bdwlan.bin / bdwlan.b10 / b20 / b21 / b22 / b23(*) / b24
+# └── qcn6122/
+#     ├── bdwlan.bin / bdwlan.b50 / b60(*) / b90 / bb0
+#     ├── m3_fw.mdt / m3_fw.b00 / b01 / b02
+#     └── q6_fw.mdt / q6_fw.b00~b21 (skip b06/b12)
+#
+# (*) = variant aktif: IPQ5018 board_id=23, QCN6122 board_id=60
+#       verified dari dmesg cnss[2] dan cnss[41]
 # ==============================================================
 
 on:
@@ -58,29 +72,39 @@ jobs:
             https://github.com/openwrt/openwrt.git openwrt
           echo "Commit: $(cd openwrt && git log --oneline -1)"
 
-      # ── Download QCN6122 DSP firmware dari ath11k-firmware repo ──────────────
-      # PENTING: q6_fw/m3_fw HARUS dari repo ini, BUKAN dari OEM.
-      # OEM pakai kernel 4.4 armv7 — DSP firmware bisa mismatch dengan
-      # ath11k driver di kernel 6.1 arm64 → WiFi 5GHz tidak jalan.
-      #
-      # Yang TETAP dari OEM (board-specific, tidak bisa diganti):
-      #   files/firmware/ipq5018/board.bin ← bdwlan.b23 (board_id 23)
-      #   files/firmware/qcn6122/board.bin ← bdwlan.b60 (board_id 60)
-      - name: Download QCN6122 DSP firmware (ath11k-firmware)
-        run: |
-          git clone --depth=1 https://github.com/kvalo/ath11k-firmware.git
-          echo "ath11k-firmware: $(cd ath11k-firmware && git log --oneline -1)"
-          ls -lh ath11k-firmware/QCN6122/hw1.0/
-
       - name: Validate required files
         run: |
           echo "=== Checking required files ==="
-          test -f files/dts/ipq5018-ruijie-rg-ma3063.dts      || (echo "MISSING: DTS file" && exit 1)
-          test -f files/firmware/ipq5018/board.bin             || (echo "MISSING: IPQ5018 board.bin (rename bdwlan.b23)" && exit 1)
-          test -f files/firmware/qcn6122/board.bin             || (echo "MISSING: QCN6122 board.bin (rename bdwlan.b60)" && exit 1)
-          test -f files/config/ma3063.config                   || (echo "MISSING: files/config/ma3063.config" && exit 1)
-          test -f files/patches/device-makefile-entry.txt      || (echo "MISSING: files/patches/device-makefile-entry.txt" && exit 1)
+
+          # DTS
+          test -f files/dts/ipq5018-ruijie-rg-ma3063.dts \
+            || (echo "MISSING: files/dts/ipq5018-ruijie-rg-ma3063.dts" && exit 1)
+
+          # Config & patches
+          test -f files/config/ma3063.config \
+            || (echo "MISSING: files/config/ma3063.config" && exit 1)
+          test -f files/patches/device-makefile-entry.txt \
+            || (echo "MISSING: files/patches/device-makefile-entry.txt" && exit 1)
+
+          # IPQ5018 firmware — minimal bdwlan.b23 (aktif board_id=23)
+          test -f files/firmware/ipq5018/bdwlan.b23 \
+            || (echo "MISSING: files/firmware/ipq5018/bdwlan.b23 (aktif, board_id 23)" && exit 1)
+
+          # QCN6122 firmware — minimal bdwlan.b60 + DSP firmware
+          test -f files/firmware/qcn6122/bdwlan.b60 \
+            || (echo "MISSING: files/firmware/qcn6122/bdwlan.b60 (aktif, board_id 60)" && exit 1)
+          test -f files/firmware/qcn6122/m3_fw.mdt \
+            || (echo "MISSING: files/firmware/qcn6122/m3_fw.mdt" && exit 1)
+          test -f files/firmware/qcn6122/q6_fw.mdt \
+            || (echo "MISSING: files/firmware/qcn6122/q6_fw.mdt" && exit 1)
+
           echo "✅ Semua file tersedia"
+          echo ""
+          echo "=== IPQ5018 firmware files ==="
+          ls -lh files/firmware/ipq5018/
+          echo ""
+          echo "=== QCN6122 firmware files ==="
+          ls -lh files/firmware/qcn6122/
 
       - name: Copy DTS and firmware to OpenWrt tree
         run: |
@@ -90,22 +114,26 @@ jobs:
           mkdir -p "$FW_DIR/IPQ5018/hw1.0"
           mkdir -p "$FW_DIR/QCN6122/hw1.0"
 
-          # DTS
+          # ── DTS ──────────────────────────────────────────────────────────────
           cp files/dts/ipq5018-ruijie-rg-ma3063.dts "$DTS_DIR/"
 
-          # IPQ5018 BDF (dari OEM, board-specific)
-          cp files/firmware/ipq5018/board.bin "$FW_DIR/IPQ5018/hw1.0/board.bin"
+          # ── IPQ5018 — semua bdwlan dari OEM ──────────────────────────────────
+          cp files/firmware/ipq5018/bdwlan.* "$FW_DIR/IPQ5018/hw1.0/"
+          # board.bin = copy dari variant aktif (board_id 23)
+          # ath11k lookup: bdwlan.b23 → board_id match → load
+          # board.bin sebagai fallback kalau lookup gagal
+          cp files/firmware/ipq5018/bdwlan.b23 "$FW_DIR/IPQ5018/hw1.0/board.bin"
 
-          # QCN6122 BDF (dari OEM, board-specific)
-          cp files/firmware/qcn6122/board.bin "$FW_DIR/QCN6122/hw1.0/board.bin"
+          # ── QCN6122 — semua bdwlan dari OEM ──────────────────────────────────
+          cp files/firmware/qcn6122/bdwlan.* "$FW_DIR/QCN6122/hw1.0/"
+          # board.bin = copy dari variant aktif (board_id 60)
+          cp files/firmware/qcn6122/bdwlan.b60 "$FW_DIR/QCN6122/hw1.0/board.bin"
 
-          # QCN6122 DSP firmware (dari ath11k-firmware repo)
-          cp ath11k-firmware/QCN6122/hw1.0/q6_fw.mdt "$FW_DIR/QCN6122/hw1.0/"
-          cp ath11k-firmware/QCN6122/hw1.0/m3_fw.mdt "$FW_DIR/QCN6122/hw1.0/"
-          find ath11k-firmware/QCN6122/hw1.0/ -name "q6_fw.b*" -exec cp {} "$FW_DIR/QCN6122/hw1.0/" \;
-          find ath11k-firmware/QCN6122/hw1.0/ -name "m3_fw.b*" -exec cp {} "$FW_DIR/QCN6122/hw1.0/" \;
+          # ── QCN6122 DSP firmware dari OEM ────────────────────────────────────
+          cp files/firmware/qcn6122/m3_fw.* "$FW_DIR/QCN6122/hw1.0/"
+          cp files/firmware/qcn6122/q6_fw.* "$FW_DIR/QCN6122/hw1.0/"
 
-          echo "=== Firmware layout ==="
+          echo "=== Final firmware layout ==="
           find "$FW_DIR" -type f | sort
 
       - name: Apply patches to OpenWrt tree
@@ -122,8 +150,6 @@ jobs:
           fi
 
           # ── Patch 2: Tambah device entry ke ipq50xx Makefile ─────────────────
-          # Konten ada di files/patches/device-makefile-entry.txt
-          # untuk menghindari masalah heredoc di YAML
           DEVICE_MK="target/linux/qualcommax/ipq50xx/Makefile"
           if ! grep -q "ruijie_rg-ma3063" "$DEVICE_MK"; then
             cat "../files/patches/device-makefile-entry.txt" >> "$DEVICE_MK"
@@ -137,7 +163,7 @@ jobs:
           BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
           if ! grep -q "ruijie,rg-ma3063" "$BOARD_NET"; then
             python3 -c "
-          import re, sys
+          import re
           content = open('$BOARD_NET').read()
           entry = '\t\truijie,rg-ma3063)\n\t\t\tucidef_set_interfaces_lan_wan \"lan1 lan2 lan3\" \"wan\"\n\t\t\t;;\n'
           content = re.sub(r'(^esac)', entry + r'\1', content, flags=re.MULTILINE)
@@ -169,7 +195,6 @@ jobs:
 
       - name: Generate build config
         run: |
-          # Copy .config dari file repo, hindari heredoc di YAML
           cp files/config/ma3063.config openwrt/.config
           cd openwrt && make defconfig
           echo "=== Active device config ==="
@@ -188,7 +213,8 @@ jobs:
 
       # ── Verifikasi config selector FIT image ──────────────────────────────────
       # config@mp03.5-c2 = asumsi dari referensi MX2000/MX5500.
-      # Kalau tidak ada di .itb output → update DEVICE_DTS_CONFIG dan bootm cmd.
+      # Kalau tidak ada → update DEVICE_DTS_CONFIG di device-makefile-entry.txt
+      # dan update bootm command saat TFTP test.
       - name: Verify FIT image config selector
         run: |
           BINDIR="openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
@@ -199,15 +225,18 @@ jobs:
             exit 0
           fi
 
-          echo "=== FIT image configs ==="
+          echo "=== FIT image configs tersedia ==="
           dumpimage -l "$ITB" | grep "config@"
 
           if dumpimage -l "$ITB" | grep -q "config@mp03.5-c2"; then
-            echo "✅ config@mp03.5-c2 ADA — U-Boot bootm command sudah benar"
+            echo ""
+            echo "✅ config@mp03.5-c2 ADA — U-Boot bootm command sudah benar:"
+            echo "   bootm 0x44000000#config@mp03.5-c2"
           else
-            echo "⚠️  config@mp03.5-c2 TIDAK ADA!"
-            echo "   Lihat daftar config di atas, update DEVICE_DTS_CONFIG"
-            echo "   di files/patches/device-makefile-entry.txt lalu rebuild."
+            echo ""
+            echo "⚠️  config@mp03.5-c2 TIDAK ADA di FIT image!"
+            echo "   Update DEVICE_DTS_CONFIG di files/patches/device-makefile-entry.txt"
+            echo "   sesuai config yang tersedia di atas, lalu rebuild."
           fi
 
       - name: Collect artifacts
@@ -224,12 +253,6 @@ jobs:
           cp openwrt/.config artifacts/dotconfig
           find "$BINDIR" -name "*.manifest" -exec cp {} artifacts/ \;
           find "$BINDIR" -name "sha256sums"  -exec cp {} artifacts/ \;
-
-          # Info ath11k firmware yang dipakai
-          cd ath11k-firmware
-          echo "ath11k-firmware commit: $(git log --oneline -1)" > ../artifacts/ath11k_fw_info.txt
-          ls -lh QCN6122/hw1.0/ >> ../artifacts/ath11k_fw_info.txt
-          cd ..
 
           echo "=== Artifacts ==="
           ls -lh artifacts/
