@@ -139,12 +139,16 @@ jobs:
         run: |
           cd openwrt
 
-          # ── Patch 1: Tambah DTB entry ke DTS Makefile ────────────────────────
+          # ── Patch 1: DTS Makefile ────────────────────────────────────────────
+          # Di 25.12 / kernel 6.12, DTB di-build otomatis dari DEVICE_DTS —
+          # tidak perlu entry di DTS Makefile. Skip kalau file tidak ada.
           echo "=== Patch 1: DTS Makefile ==="
           DTS_MK="${{ env.DTS_DIR }}/Makefile"
-          if ! grep -q "ipq5018-ruijie-rg-ma3063" "$DTS_MK"; then
+          if [ ! -f "$DTS_MK" ]; then
+            echo "⏭ Makefile tidak ada — kernel 6.12 discover DTB otomatis, skip"
+          elif ! grep -q "ipq5018-ruijie-rg-ma3063" "$DTS_MK"; then
             echo "before:" && grep "ipq5018" "$DTS_MK" | tail -3
-            sed -i "/ipq5018-.*\.dtb/a\\\tdtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb" "$DTS_MK"
+            sed -i "/ipq5018-.*\.dtb/a\dtb-\$(CONFIG_ARCH_QCOM) += ipq5018-ruijie-rg-ma3063.dtb" "$DTS_MK"
             echo "after:" && grep "ipq5018-ruijie" "$DTS_MK"
             echo "✅ Patched"
           else
