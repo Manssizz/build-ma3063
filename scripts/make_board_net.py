@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Helper: buat file 02_network untuk Ruijie RG-MA3063
-Dipanggil dari GitHub Actions workflow saat file belum ada.
+Buat file 02_network untuk Ruijie RG-MA3063.
+Pakai struktur OpenWrt 25.12 (fungsi ipq50xx_setup_interfaces).
+Dipanggil dari GitHub Actions workflow saat file belum ada di tree.
 """
 import sys
 import os
@@ -13,14 +14,21 @@ content = """\
 #!/bin/sh
 . /lib/functions/uci-defaults.sh
 
-board_config_update
+ipq50xx_setup_interfaces()
+{
+\tlocal board="$1"
 
-board=$(board_name)
-case "$board" in
+\tcase $board in
 \truijie,rg-ma3063)
 \t\tucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
 \t\t;;
-esac
+\tesac
+}
+
+board_config_update
+
+board=$(board_name)
+ipq50xx_setup_interfaces "$board"
 
 board_config_flush
 exit 0
@@ -30,4 +38,4 @@ os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 with open(path, "w") as f:
     f.write(content)
 os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-print(f"Created: {path}")
+print(f"✅ Created: {path}")
