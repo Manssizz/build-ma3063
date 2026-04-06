@@ -27,7 +27,7 @@ env:
 
   # Path di openwrt-25.12 (hardcoded, sudah diverifikasi dari repo)
   DTS_DIR: target/linux/qualcommax/files/arch/arm64/boot/dts/qcom
-  DEVICE_MK: target/linux/qualcommax/Makefile
+  DEVICE_MK: target/linux/qualcommax/image/ipq50xx.mk
   BOARD_NET: target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
   FW_DIR: target/linux/qualcommax/ipq50xx/base-files/lib/firmware/ath11k
 
@@ -40,7 +40,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-
 
       - name: Install build dependencies
         run: |
@@ -78,22 +77,6 @@ jobs:
           echo "=== ipq50xx/ ==="
           find openwrt/target/linux/qualcommax/ipq50xx -maxdepth 2 | sort
 
-      - name: Validate DTS syntax locally
-        run: |
-          cd openwrt
-          # Pre-process DTS dulu
-          aarch64-linux-gnu-cpp -nostdinc -x assembler-with-cpp \
-            -I build_dir/target-*/linux-*/linux-*/arch/arm64/boot/dts \
-            -I build_dir/target-*/linux-*/linux-*/arch/arm64/boot/dts/include \
-            -I build_dir/target-*/linux-*/linux-*/include \
-            -undef -D__DTS__ \
-            -o /tmp/ma3063.dtb.tmp \
-            ${{ env.DTS_DIR }}/ipq5018-ruijie-rg-ma3063.dts 2>&1 || true
-
-          # Cek error spesifik
-          echo "=== DTC parse attempt ==="
-          dtc -O dtb -o /dev/null /tmp/ma3063.dtb.tmp 2>&1 || true
-          
       - name: Validate required files in repo
         run: |
           echo "=== Checking repo files ==="
