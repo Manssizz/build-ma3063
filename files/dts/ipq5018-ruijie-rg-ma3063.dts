@@ -1,0 +1,456 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * Device Tree Source for Ruijie RG-MA3063
+ *
+ * Hardware Specifications:
+ *   SoC  : Qualcomm IPQ5000 (IPQ50xx family, compatible with IPQ5018)
+ *   CPU  : Dual-core ARM Cortex-A53 @ 1.0 GHz
+ *   RAM  : 256 MB DDR (@ 0x40000000)
+ *   Flash: 128 MB SPI NAND
+ *   WiFi : AX3000 (2.4 GHz IPQ5018 internal + 5 GHz QCN6122 external)
+ *   ETH  : 4x Gigabit RJ45 (1x WAN + 3x LAN), QCA8337 switch
+ *   Power: DC 12V
+ *
+ * Verification Status (all confirmed from live hardware):
+ *   ✅ Partition layout  : /proc/mtd (20 partitions)
+ *   ✅ GPIO 26 (sw rst)  : dmesg "GPIO26 reset switch done"
+ *   ✅ GPIO 37 (reset)   : polling test (active-low, normally HIGH)
+ *   ✅ LED controller    : SSDK via QCA8337 (ssdk_led_mode:3, led_map:0xffc)
+ *   ✅ MAC address       : 48:81:d4:8a:dc:e5 (ART offset 0x0)
+ *   ✅ IPQ5018 caldata   : ART offset 0x1000, 128KB
+ *   ✅ QCN6122 caldata   : ART offset 0x26800, 128KB
+ *   ✅ IPQ5018 BDF       : bdwlan.b23 (board_id 23, cnss[2])
+ *   ✅ QCN6122 BDF       : qcn6122/bdwlan.b60 (board_id 60, cnss[41])
+ *   ✅ WAN port          : eth0 → MAC0 GE PHY (dp1)
+ *   ✅ LAN ports         : eth1-3 → QCA8337 via SGMII (dp2)
+ *
+ * Topology:
+ *   IPQ5018 MAC0 ──GE PHY────────────────────── WAN port
+ *   IPQ5018 MAC1 ──SGMII──┐
+ *                          └── QCA8337 SerDes ── LAN 1/2/3
+ *
+ * Note: Node names use upstream kernel 6.12 convention, NOT QSDK.
+ *   &switch  (not &ess_switch)
+ *   &wifi    (not &wifi0, internal 2.4GHz)
+ *   &wifi1   (external 5GHz QCN6122)
+ *
+ * Copyright (C) 2025 OpenWrt Contributors
+ */
+
+/dts-v1/;
+
+#include "ipq5018.dtsi"
+#include "ipq5018-ess.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "Ruijie RG-MA3063";
+	compatible = "ruijie,rg-ma3063", "qcom,ipq5018";
+
+	/* ============================================================
+	 * ALIASES
+	 * ============================================================ */
+	aliases {
+		serial0 = &blsp1_uart1;
+	};
+
+	/* ============================================================
+	 * CHOSEN
+	 * ============================================================ */
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs-append = " ubi.mtd=rootfs root=mtd:ubi_rootfs rootfstype=squashfs rootwait coherent_pool=2M";
+	};
+
+	/* ============================================================
+	 * MEMORY — 256MB DDR
+	 * ============================================================ */
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x0 0x10000000>;
+	};
+
+	/* ============================================================
+	 * GPIO KEYS — Reset Button
+	 * ✅ GPIO 37 = reset button (verified: polling test, active-low)
+	 * ============================================================ */
+	keys {
+		compatible = "gpio-keys";
+
+		reset {
+			label = "reset";
+			linux,code = <KEY_RESTART>;
+			gpios = <&tlmm 37 GPIO_ACTIVE_LOW>;
+			debounce-interval = <60>;
+		};
+	};
+};
+
+/* ==============================================================
+ * UART — Serial Console (115200 8N1)
+ * ============================================================== */
+&blsp1_uart1 {
+	status = "okay";
+};
+
+/* ==============================================================
+ * QPIC NAND FLASH — 128MB SPI NAND
+ *
+ * ✅ Layout partisi DIVERIFIKASI dari /proc/mtd perangkat asli.
+ *
+ * | mtd| Label           | Offset     | Size     |
+ * |----|-----------------|------------|----------|
+ * |  0 | 0:SBL1          | 0x0000000  | 512KB    |
+ * |  1 | 0:MIBIB         | 0x0080000  | 512KB    |
+ * |  2 | 0:BOOTCONFIG    | 0x0100000  | 256KB    |
+ * |  3 | 0:BOOTCONFIG1   | 0x0140000  | 256KB    |
+ * |  4 | 0:QSEE          | 0x0180000  | 1MB      |
+ * |  5 | 0:QSEE_1        | 0x0280000  | 1MB      |
+ * |  6 | 0:DEVCFG        | 0x0380000  | 256KB    |
+ * |  7 | 0:DEVCFG_1      | 0x03c0000  | 256KB    |
+ * |  8 | 0:CDT           | 0x0400000  | 256KB    |
+ * |  9 | 0:CDT_1         | 0x0440000  | 256KB    |
+ * | 10 | 0:APPSBLENV     | 0x0480000  | 512KB    |
+ * | 11 | 0:APPSBL        | 0x0500000  | 1.25MB   |
+ * | 12 | 0:APPSBL_1      | 0x0640000  | 1.25MB   |
+ * | 13 | 0:ART           | 0x0780000  | 1MB      |
+ * | 14 | 0:TRAINING      | 0x0880000  | 512KB    |
+ * | 15 | rootfs          | 0x0900000  | 50MB     | ← TARGET
+ * | 16 | rootfs_1        | 0x3b00000  | 50MB     |
+ * | 17 | ttyMTD          | 0x6d00000  | 1.1MB    |
+ * | 18 | productinfo     | 0x6e20000  | 512KB    |
+ * | 19 | data            | 0x6ea0000  | 16.25MB  |
+ * ============================================================== */
+&qpic_nand {
+	status = "okay";
+
+	nand@0 {
+		reg = <0>;
+		nand-ecc-strength = <4>;
+		nand-ecc-step-size = <512>;
+		nand-bus-width = <8>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "0:SBL1";
+				reg = <0x0 0x80000>;
+				read-only;
+			};
+			partition@80000 {
+				label = "0:MIBIB";
+				reg = <0x80000 0x80000>;
+				read-only;
+			};
+			partition@100000 {
+				label = "0:BOOTCONFIG";
+				reg = <0x100000 0x40000>;
+				read-only;
+			};
+			partition@140000 {
+				label = "0:BOOTCONFIG1";
+				reg = <0x140000 0x40000>;
+				read-only;
+			};
+			partition@180000 {
+				label = "0:QSEE";
+				reg = <0x180000 0x100000>;
+				read-only;
+			};
+			partition@280000 {
+				label = "0:QSEE_1";
+				reg = <0x280000 0x100000>;
+				read-only;
+			};
+			partition@380000 {
+				label = "0:DEVCFG";
+				reg = <0x380000 0x40000>;
+				read-only;
+			};
+			partition@3c0000 {
+				label = "0:DEVCFG_1";
+				reg = <0x3c0000 0x40000>;
+				read-only;
+			};
+			partition@400000 {
+				label = "0:CDT";
+				reg = <0x400000 0x40000>;
+				read-only;
+			};
+			partition@440000 {
+				label = "0:CDT_1";
+				reg = <0x440000 0x40000>;
+				read-only;
+			};
+			partition@480000 {
+				label = "0:APPSBLENV";
+				reg = <0x480000 0x80000>;
+			};
+			partition@500000 {
+				label = "0:APPSBL";
+				reg = <0x500000 0x140000>;
+				read-only;
+			};
+			partition@640000 {
+				label = "0:APPSBL_1";
+				reg = <0x640000 0x140000>;
+				read-only;
+			};
+
+			/*
+			 * ⚠ ART — WiFi Calibration + MAC Addresses
+			 * JANGAN ditulis ulang. Backup wajib sebelum flash.
+			 *
+			 * Layout (verified from live hardware):
+			 *   0x0000  : MAC ETH/WAN  → 48:81:d4:8a:dc:e5
+			 *   0x0006  : MAC WiFi 2.4G
+			 *   0x1000  : IPQ5018 caldata (128KB)
+			 *   0x26800 : QCN6122 caldata (128KB)
+			 */
+			partition@780000 {
+				label = "0:ART";
+				reg = <0x780000 0x100000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_art_eth: macaddr@0 {
+						reg = <0x0 0x6>;
+					};
+
+					macaddr_art_2g: macaddr@6 {
+						reg = <0x6 0x6>;
+					};
+
+					caldata_2g: caldata@1000 {
+						reg = <0x1000 0x20000>;
+					};
+
+					caldata_5g: caldata@26800 {
+						reg = <0x26800 0x20000>;
+					};
+				};
+			};
+
+			partition@880000 {
+				label = "0:TRAINING";
+				reg = <0x880000 0x80000>;
+				read-only;
+			};
+
+			/* ← TARGET: OpenWrt dipasang di sini */
+			partition@900000 {
+				label = "rootfs";
+				reg = <0x900000 0x3200000>;
+			};
+
+			partition@3b00000 {
+				label = "rootfs_1";
+				reg = <0x3b00000 0x3200000>;
+			};
+
+			partition@6d00000 {
+				label = "ttyMTD";
+				reg = <0x6d00000 0x120000>;
+			};
+
+			partition@6e20000 {
+				label = "productinfo";
+				reg = <0x6e20000 0x80000>;
+				read-only;
+			};
+
+			partition@6ea0000 {
+				label = "data";
+				reg = <0x6ea0000 0x1040000>;
+			};
+		};
+	};
+};
+
+/* ==============================================================
+ * MDIO0 — IPQ5018 internal GE PHY (WAN port)
+ * ============================================================== */
+&mdio0 {
+	status = "okay";
+};
+
+/* ==============================================================
+ * MDIO1 — QCA8337 switch management
+ *
+ * ✅ GPIO 26 = switch reset (verified: dmesg "GPIO26 reset switch done")
+ *
+ * Topology QCA8337:
+ *   port@2 = LAN1  (phy1)
+ *   port@3 = LAN2  (phy2)
+ *   port@4 = LAN3  (phy3)
+ *   port@6 = CPU   (SGMII → dp2)
+ *
+ * ⚠ port WAN di MA3063 adalah IPQ5018 GE PHY langsung (dp1),
+ *   bukan port QCA8337. Berbeda dengan MX2000 yang WAN-nya
+ *   lewat QCA8337 Phy4.
+ * ============================================================== */
+&mdio1 {
+	status = "okay";
+
+	pinctrl-0 = <&mdio1_pins>;
+	pinctrl-names = "default";
+	reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
+
+	qca8337_phy1: ethernet-phy@1 {
+		reg = <1>;
+	};
+
+	qca8337_phy2: ethernet-phy@2 {
+		reg = <2>;
+	};
+
+	qca8337_phy3: ethernet-phy@3 {
+		reg = <3>;
+	};
+
+	switch1: ethernet-switch@17 {
+		compatible = "qca,qca8337";
+		reg = <17>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/* LAN 1 */
+			port@2 {
+				reg = <2>;
+				label = "lan1";
+				phy-handle = <&qca8337_phy1>;
+			};
+
+			/* LAN 2 */
+			port@3 {
+				reg = <3>;
+				label = "lan2";
+				phy-handle = <&qca8337_phy2>;
+			};
+
+			/* LAN 3 */
+			port@4 {
+				reg = <4>;
+				label = "lan3";
+				phy-handle = <&qca8337_phy3>;
+			};
+
+			/* CPU port — terhubung ke dp2 via SGMII */
+			port@6 {
+				reg = <6>;
+				label = "cpu";
+				phy-mode = "sgmii";
+				ethernet = <&dp2>;
+				qca,sgmii-enable-pll;
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+		};
+	};
+};
+
+/* ==============================================================
+ * ESS SWITCH — upstream kernel 6.12: &switch (bukan &ess_switch)
+ *
+ * MAC0 → GE PHY → WAN (dp1, langsung)
+ * MAC1 → SGMII  → QCA8337 SerDes → LAN 1-3 (dp2)
+ * ============================================================== */
+&switch {
+	status = "okay";
+
+	switch_mac_mode = <MAC_MODE_SGMII_CHANNEL0>;
+
+	qcom,port_phyinfo {
+		/* MAC0 → GE PHY → WAN */
+		port@0 {
+			port_id = <1>;
+			mdiobus = <&mdio0>;
+			phy_address = <7>;
+		};
+
+		/* MAC1 → SGMII → QCA8337 */
+		port@1 {
+			port_id = <2>;
+			forced-speed = <1000>;
+			forced-duplex = <1>;
+		};
+	};
+};
+
+/* ==============================================================
+ * DATA PATH
+ * dp1 = MAC0 → GE PHY → WAN
+ * dp2 = MAC1 → SGMII  → QCA8337 (LAN 1-3)
+ * ============================================================== */
+&dp1 {
+	status = "okay";
+	label = "wan";
+
+	nvmem-cells = <&macaddr_art_eth>;
+	nvmem-cell-names = "mac-address";
+};
+
+&dp2 {
+	status = "okay";
+
+	nvmem-cells = <&macaddr_art_eth>;
+	nvmem-cell-names = "mac-address";
+	mac-address-increment = <1>;
+
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+};
+
+/* ==============================================================
+ * WiFi 2.4GHz — IPQ5018 Internal Radio
+ *
+ * ✅ BDF aktif: bdwlan.b23 (board_id 23, confirmed dmesg cnss[2])
+ * ✅ caldata: ART offset 0x1000, 128KB
+ *
+ * Node name di kernel 6.12: &wifi (bukan &wifi0)
+ * ============================================================== */
+&wifi {
+	status = "okay";
+
+	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
+	qcom,ath11k-fw-memory-mode = <1>;
+
+	nvmem-cells = <&macaddr_art_2g>, <&caldata_2g>;
+	nvmem-cell-names = "mac-address", "calibration";
+};
+
+/* ==============================================================
+ * WiFi 5GHz — QCN6122 External Radio
+ *
+ * ✅ BDF aktif: qcn6122/bdwlan.b60 (board_id 60, confirmed dmesg cnss[41])
+ * ✅ caldata: ART offset 0x26800, 128KB
+ *
+ * Node name di kernel 6.12: &wifi1 (sama)
+ * ============================================================== */
+&wifi1 {
+	status = "okay";
+
+	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
+	qcom,ath11k-fw-memory-mode = <1>;
+
+	nvmem-cells = <&macaddr_art_eth>, <&caldata_5g>;
+	nvmem-cell-names = "mac-address", "calibration";
+	mac-address-increment = <2>;
+};
