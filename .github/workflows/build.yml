@@ -41,6 +41,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate DTS syntax locally
+        run: |
+          cd openwrt
+          # Pre-process DTS dulu
+          aarch64-linux-gnu-cpp -nostdinc -x assembler-with-cpp \
+            -I build_dir/target-*/linux-*/linux-*/arch/arm64/boot/dts \
+            -I build_dir/target-*/linux-*/linux-*/arch/arm64/boot/dts/include \
+            -I build_dir/target-*/linux-*/linux-*/include \
+            -undef -D__DTS__ \
+            -o /tmp/ma3063.dtb.tmp \
+            ${{ env.DTS_DIR }}/ipq5018-ruijie-rg-ma3063.dts 2>&1 || true
+
+          # Cek error spesifik
+          echo "=== DTC parse attempt ==="
+          dtc -O dtb -o /dev/null /tmp/ma3063.dtb.tmp 2>&1 || true
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
