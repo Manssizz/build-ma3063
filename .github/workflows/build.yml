@@ -240,18 +240,30 @@ jobs:
       - name: Build toolchain
         run: |
           cd openwrt
-          make toolchain/install -j$(nproc) V=s 2>&1 | tail -5
+          echo "Building toolchain with $(nproc) threads"
+          make toolchain/install -j$(($(nproc) + 1)) V=s || \
+          make toolchain/install -j1 V=s
           echo "✅ Toolchain done"
 
       - name: Build firmware image
+        id: compile
         run: |
           cd openwrt
-          make -j$(nproc) V=s 2>&1 | tee /tmp/build.log | \
-            grep -E "make\[1\]|ERROR:|error:|WARNING:|Built target|ruijie|ath11k" || true
+          echo "Compiling with $(nproc) threads"
+
+          # Multi-thread: coba nproc+1 dulu, fallback ke j1 kalau gagal
+          make -j$(($(nproc) + 1)) V=s 2>&1 | tee /tmp/build.log | \
+            grep -E "make\[1\]|ERROR:|error:|WARNING:|Built target|ruijie|ath11k" || \
+          make -j1 V=s 2>&1 | tee /tmp/build.log | \
+            grep -E "make\[1\]|ERROR:|error:|Built target|ruijie|ath11k" || \
+          make -j1 V=s 2>&1 | tee /tmp/build.log
+
           echo ""
           echo "=== Output files ==="
           find bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/ \
             -maxdepth 1 -type f | sort
+
+          echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Verify FIT image config selector
         run: |
