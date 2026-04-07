@@ -15,24 +15,18 @@
  *   ✅ Partition layout  : /proc/mtd (20 partitions)
  *   ✅ GPIO 26 (sw rst)  : dmesg "GPIO26 reset switch done"
  *   ✅ GPIO 37 (reset)   : polling test (active-low, normally HIGH)
- *   ✅ LED controller    : SSDK via QCA8337 (ssdk_led_mode:3, led_map:0xffc)
  *   ✅ MAC address       : 48:81:d4:8a:dc:e5 (ART offset 0x0)
  *   ✅ IPQ5018 caldata   : ART offset 0x1000, 128KB
  *   ✅ QCN6122 caldata   : ART offset 0x26800, 128KB
- *   ✅ IPQ5018 BDF       : bdwlan.b23 (board_id 23, cnss[2])
- *   ✅ QCN6122 BDF       : qcn6122/bdwlan.b60 (board_id 60, cnss[41])
- *   ✅ WAN port          : eth0 → MAC0 GE PHY (dp1)
- *   ✅ LAN ports         : eth1-3 → QCA8337 via SGMII (dp2)
+ *   ✅ IPQ5018 BDF       : bdwlan.b23 (board_id 23)
+ *   ✅ QCN6122 BDF       : qcn6122/bdwlan.b60 (board_id 60)
+ *   ✅ WAN               : IPQ5018 GE PHY langsung (MAC0/dp1)
+ *   ✅ LAN 1-3           : QCA8337 via SGMII (MAC1/dp2)
  *
  * Topology:
- *   IPQ5018 MAC0 ──GE PHY────────────────────── WAN port
+ *   IPQ5018 MAC0 ──GE PHY──────────────── WAN port
  *   IPQ5018 MAC1 ──SGMII──┐
- *                          └── QCA8337 SerDes ── LAN 1/2/3
- *
- * Note: Node names use upstream kernel 6.12 convention, NOT QSDK.
- *   &switch  (not &ess_switch)
- *   &wifi    (not &wifi0, internal 2.4GHz)
- *   &wifi1   (external 5GHz QCN6122)
+ *                          └─ QCA8337 ──── LAN 1/2/3
  *
  * Copyright (C) 2025 OpenWrt Contributors
  */
@@ -40,7 +34,7 @@
 /dts-v1/;
 
 #include "ipq5018.dtsi"
-#include "ipq5018-ess.dtsi"
+#include "ipq5018-qcn6122.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 
@@ -48,24 +42,15 @@
 	model = "Ruijie RG-MA3063";
 	compatible = "ruijie,rg-ma3063", "qcom,ipq5018";
 
-	/* ============================================================
-	 * ALIASES
-	 * ============================================================ */
 	aliases {
 		serial0 = &blsp1_uart1;
 	};
 
-	/* ============================================================
-	 * CHOSEN
-	 * ============================================================ */
 	chosen {
 		stdout-path = "serial0:115200n8";
 		bootargs-append = " ubi.mtd=rootfs root=mtd:ubi_rootfs rootfstype=squashfs rootwait coherent_pool=2M";
 	};
 
-	/* ============================================================
-	 * MEMORY — 256MB DDR
-	 * ============================================================ */
 	memory@40000000 {
 		device_type = "memory";
 		reg = <0x0 0x40000000 0x0 0x10000000>;
@@ -97,30 +82,7 @@
 /* ==============================================================
  * QPIC NAND FLASH — 128MB SPI NAND
  *
- * ✅ Layout partisi DIVERIFIKASI dari /proc/mtd perangkat asli.
- *
- * | mtd| Label           | Offset     | Size     |
- * |----|-----------------|------------|----------|
- * |  0 | 0:SBL1          | 0x0000000  | 512KB    |
- * |  1 | 0:MIBIB         | 0x0080000  | 512KB    |
- * |  2 | 0:BOOTCONFIG    | 0x0100000  | 256KB    |
- * |  3 | 0:BOOTCONFIG1   | 0x0140000  | 256KB    |
- * |  4 | 0:QSEE          | 0x0180000  | 1MB      |
- * |  5 | 0:QSEE_1        | 0x0280000  | 1MB      |
- * |  6 | 0:DEVCFG        | 0x0380000  | 256KB    |
- * |  7 | 0:DEVCFG_1      | 0x03c0000  | 256KB    |
- * |  8 | 0:CDT           | 0x0400000  | 256KB    |
- * |  9 | 0:CDT_1         | 0x0440000  | 256KB    |
- * | 10 | 0:APPSBLENV     | 0x0480000  | 512KB    |
- * | 11 | 0:APPSBL        | 0x0500000  | 1.25MB   |
- * | 12 | 0:APPSBL_1      | 0x0640000  | 1.25MB   |
- * | 13 | 0:ART           | 0x0780000  | 1MB      |
- * | 14 | 0:TRAINING      | 0x0880000  | 512KB    |
- * | 15 | rootfs          | 0x0900000  | 50MB     | ← TARGET
- * | 16 | rootfs_1        | 0x3b00000  | 50MB     |
- * | 17 | ttyMTD          | 0x6d00000  | 1.1MB    |
- * | 18 | productinfo     | 0x6e20000  | 512KB    |
- * | 19 | data            | 0x6ea0000  | 16.25MB  |
+ * ✅ Layout diverifikasi dari /proc/mtd perangkat asli
  * ============================================================== */
 &qpic_nand {
 	status = "okay";
@@ -203,7 +165,7 @@
 
 			/*
 			 * ⚠ ART — WiFi Calibration + MAC Addresses
-			 * JANGAN ditulis ulang. Backup wajib sebelum flash.
+			 * JANGAN ditulis ulang!
 			 *
 			 * Layout (verified from live hardware):
 			 *   0x0000  : MAC ETH/WAN  → 48:81:d4:8a:dc:e5
@@ -227,14 +189,6 @@
 
 					macaddr_art_2g: macaddr@6 {
 						reg = <0x6 0x6>;
-					};
-
-					caldata_2g: caldata@1000 {
-						reg = <0x1000 0x20000>;
-					};
-
-					caldata_5g: caldata@26800 {
-						reg = <0x26800 0x20000>;
 					};
 				};
 			};
@@ -276,26 +230,22 @@
 };
 
 /* ==============================================================
- * MDIO0 — IPQ5018 internal GE PHY (WAN port)
+ * MDIO0 — IPQ5018 internal GE PHY (WAN port, dp1)
  * ============================================================== */
 &mdio0 {
 	status = "okay";
 };
 
 /* ==============================================================
- * MDIO1 — QCA8337 switch management
+ * MDIO1 — QCA8337 switch + PHYs
  *
  * ✅ GPIO 26 = switch reset (verified: dmesg "GPIO26 reset switch done")
  *
- * Topology QCA8337:
- *   port@2 = LAN1  (phy1)
- *   port@3 = LAN2  (phy2)
- *   port@4 = LAN3  (phy3)
- *   port@6 = CPU   (SGMII → dp2)
- *
- * ⚠ port WAN di MA3063 adalah IPQ5018 GE PHY langsung (dp1),
- *   bukan port QCA8337. Berbeda dengan MX2000 yang WAN-nya
- *   lewat QCA8337 Phy4.
+ * MA3063 port mapping:
+ *   phy@1 → LAN1
+ *   phy@2 → LAN2
+ *   phy@3 → LAN3
+ *   (WAN adalah dp1 via GE PHY, bukan port QCA8337)
  * ============================================================== */
 &mdio1 {
 	status = "okay";
@@ -326,21 +276,18 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			/* LAN 1 */
 			port@2 {
 				reg = <2>;
 				label = "lan1";
 				phy-handle = <&qca8337_phy1>;
 			};
 
-			/* LAN 2 */
 			port@3 {
 				reg = <3>;
 				label = "lan2";
 				phy-handle = <&qca8337_phy2>;
 			};
 
-			/* LAN 3 */
 			port@4 {
 				reg = <4>;
 				label = "lan3";
@@ -365,10 +312,10 @@
 };
 
 /* ==============================================================
- * ESS SWITCH — upstream kernel 6.12: &switch (bukan &ess_switch)
+ * ESS SWITCH — kernel 6.12: node name &switch
  *
- * MAC0 → GE PHY → WAN (dp1, langsung)
- * MAC1 → SGMII  → QCA8337 SerDes → LAN 1-3 (dp2)
+ * MAC0 → GE PHY → WAN (dp1, direct)
+ * MAC1 → SGMII  → QCA8337 (dp2, LAN 1-3)
  * ============================================================== */
 &switch {
 	status = "okay";
@@ -383,7 +330,7 @@
 			phy_address = <7>;
 		};
 
-		/* MAC1 → SGMII → QCA8337 */
+		/* MAC1 → SGMII → QCA8337 SerDes */
 		port@1 {
 			port_id = <2>;
 			forced-speed = <1000>;
@@ -394,8 +341,8 @@
 
 /* ==============================================================
  * DATA PATH
- * dp1 = MAC0 → GE PHY → WAN
- * dp2 = MAC1 → SGMII  → QCA8337 (LAN 1-3)
+ * dp1 = WAN  (MAC0 → GE PHY)
+ * dp2 = LAN  (MAC1 → SGMII → QCA8337)
  * ============================================================== */
 &dp1 {
 	status = "okay";
@@ -419,43 +366,55 @@
 };
 
 /* ==============================================================
- * WiFi 2.4GHz — IPQ5018 Internal Radio
+ * QCN6122 — remoteproc boot-args
+ *
+ * QCN6122 diboot oleh WCSS Q6 sebagai user-PD.
+ * UPD ID 2 untuk QCN6122 (type 0x1 = PCIE0).
+ * ============================================================== */
+&q6v5_wcss {
+	boot-args = <
+			/*   type: */	0x1	/* PCIE0 */
+			/* length: */	4
+			/* UPD ID: */	2
+			/*  reset: */	0	/* no dedicated reset GPIO */
+			/*   rsvd: */	0 0>;
+};
+
+/* ==============================================================
+ * WiFi 2.4GHz — IPQ5018 Internal Radio (ath11k)
  *
  * ✅ BDF aktif: bdwlan.b23 (board_id 23, confirmed dmesg cnss[2])
- * ✅ caldata: ART offset 0x1000, 128KB
- *
- * Node name di kernel 6.12: &wifi (bukan &wifi0)
+ * ✅ BDF addr  : 0x4c400000 (standard IPQ5018 BDF load address)
  * ============================================================== */
 &wifi {
 	status = "okay";
 
+	qcom,rproc = <&q6_wcss_pd1>;
 	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
 	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4c400000>;
 
-	nvmem-cells = <&macaddr_art_2g>, <&caldata_2g>;
-	nvmem-cell-names = "mac-address", "calibration";
+	nvmem-cells = <&macaddr_art_2g>;
+	nvmem-cell-names = "mac-address";
 };
 
 /* ==============================================================
- * WiFi 5GHz — QCN6122 External Radio
+ * WiFi 5GHz — QCN6122 External Radio (ath11k MPD)
  *
  * ✅ BDF aktif: qcn6122/bdwlan.b60 (board_id 60, confirmed dmesg cnss[41])
- * ✅ caldata: ART offset 0x26800, 128KB
- *
- * TODO: &wifi1 node tergantung pada ipq5018-qcn6122.dtsi atau
- * definisi di ipq5018.dtsi kernel 6.12. Perlu verifikasi nama
- * node yang benar dari debug output.
- * Dinonaktifkan sementara agar build bisa proceed dulu.
+ * ✅ BDF addr  : 0x4d100000 (standard QCN6122 BDF load address)
  * ============================================================== */
-/*
 &wifi1 {
 	status = "okay";
 
+	qcom,rproc = <&q6_wcss_pd2>;
+	qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
 	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
 	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4d100000>;
+	qcom,m3-dump-addr = <0x4df00000>;
 
-	nvmem-cells = <&macaddr_art_eth>, <&caldata_5g>;
-	nvmem-cell-names = "mac-address", "calibration";
+	nvmem-cells = <&macaddr_art_eth>;
+	nvmem-cell-names = "mac-address";
 	mac-address-increment = <2>;
 };
-*/
