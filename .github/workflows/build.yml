@@ -238,6 +238,7 @@ jobs:
           grep -E "^CONFIG_TARGET|DEVICE_ruijie|PACKAGE_luci|PACKAGE_ath11k|PACKAGE_kmod-ath11k" .config
 
       - name: Build toolchain
+        continue-on-error: false
         run: |
           cd openwrt
           echo "Building toolchain with $(nproc) threads"
@@ -247,6 +248,7 @@ jobs:
 
       - name: Build firmware image
         id: compile
+        continue-on-error: true
         run: |
           cd openwrt
           echo "Compiling with $(nproc) threads"
